@@ -242,7 +242,7 @@ contract PWNDeed is ERC1155, ERC1155Burnable, Ownable  {
         uint256[] memory amounts,
         bytes memory data
     )
-    internal
+    internal view
     virtual override
     {
         for (uint i = 0; i < ids.length; i++) {

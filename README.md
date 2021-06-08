@@ -30,3 +30,17 @@ It wraps transfer, allowance & balance check calls of the following token standa
 - ERC1155
 
 Unifying the function calls used within the PWN context (not having to worry about handling those individually).
+
+
+## Deployment
+
+For deployment procedure see `./scripts/deploy-PWN-only.js`
+NOTE: you will have to use your own deployment key. Simples optino is to create a following .json which is assumed
+to exist for Kovan testnet deployment - in the root folder:
+create `.keys/PRIVATE.json`
+with the following content:
+```
+{
+  "key1": "<insert your raw private key here>"
+}
+```

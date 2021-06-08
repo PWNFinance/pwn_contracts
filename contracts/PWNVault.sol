@@ -29,7 +29,7 @@ contract PWNVault is Ownable, IERC1155Receiver{
     |*  # EVENTS & ERRORS DEFINITIONS                           *|
     |*----------------------------------------------------------*/
 
-    event VaultPush(MultiToken.Asset asset);
+    event VaultPush(MultiToken.Asset asset, address indexed origin);
     event VaultPull(MultiToken.Asset asset, address indexed beneficiary);
     event VaultProxy(MultiToken.Asset asset, address indexed origin, address indexed beneficiary);
 
@@ -56,9 +56,9 @@ contract PWNVault is Ownable, IERC1155Receiver{
      *  @dev the function assumes a prior token approval was made with the PWNVault.address to be approved
      *  @param _asset - an asset construct - for definition see { MultiToken.sol }
      */
-    function push(MultiToken.Asset memory _asset) external onlyPWN returns (bool) {
-        _asset.transferAssetFrom(tx.origin, address(this));
-        emit VaultPush(_asset);
+    function push(MultiToken.Asset memory _asset, address _origin) external onlyPWN returns (bool) {
+        _asset.transferAssetFrom(_origin, address(this));
+        emit VaultPush(_asset, _origin);
         return true;
     }
 

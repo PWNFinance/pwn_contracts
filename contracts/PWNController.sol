@@ -6,7 +6,7 @@ import "./PWNVault.sol";
 import "./PWNDeed.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract PWN is Ownable {
+contract Controller is Ownable {
 
     /*----------------------------------------------------------*|
     |*  # VARIABLES & CONSTANTS DEFINITIONS                     *|
@@ -24,7 +24,7 @@ contract PWN is Ownable {
     |*----------------------------------------------------------*/
 
     event NewDeed(uint8 cat, uint256 id, uint256 amount, address indexed tokenAddress, uint256 expiration, uint256 indexed did);
-    event NewOffer(uint8 cat, uint256 amount, address tokenAddress, address indexed lender, uint256 toBePaid, uint256 indexed did, bytes32 offer);
+    event NewOffer(uint8 cat, uint256 amount, address tokenAddress, address indexed lender, uint256 toBePaid, uint256 indexed did, bytes32 indexed offer);
     event DeedRevoked(uint256 did);
     event OfferRevoked(bytes32 offer);
     event OfferAccepted(uint256 did, bytes32 offer);
@@ -77,7 +77,7 @@ contract PWN is Ownable {
         require(_expiration > (block.timestamp + minDuration));
 
         uint256 did = token.mint(_cat, _id, _amount, _tokenAddress, _expiration, msg.sender);
-        vault.push(token.getDeedAsset(did));
+        vault.push(token.getDeedAsset(did), msg.sender);
         token.changeStatus(1, did);
 
         emit NewDeed(_cat, _id, _amount, _tokenAddress, _expiration, did);
@@ -180,6 +180,7 @@ contract PWN is Ownable {
      *  @dev the borrower can pay back the funds through this function
      *  @dev the function assumes the asset (and amount to be paid back) to be returned is approved for PWNVault
      *  @dev the function assumes the borrower has the full amount to be paid back in their account
+     *  @dev the Deed can be paid by any address BUT it will always be returned to the pre-set borrower address
      *  @param _did - Deed ID of the deed being paid back
      *  @returns true if successful
      */
@@ -192,8 +193,8 @@ contract PWN is Ownable {
         MultiToken.Asset memory credit = token.getOfferAsset(offer);
         credit.amount = token.toBePaid(offer);               //override the num of credit given
 
+        vault.push(credit, msg.sender);
         vault.pull(token.getDeedAsset(_did), token.getBorrower(_did));
-        vault.push(credit);
 
         emit PaidBack(_did, offer);
         return true;
