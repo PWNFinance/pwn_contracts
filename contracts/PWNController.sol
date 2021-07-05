@@ -6,7 +6,7 @@ import "./PWNVault.sol";
 import "./PWNDeed.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Controller is Ownable {
+contract PWNController is Ownable {
 
     /*----------------------------------------------------------*|
     |*  # VARIABLES & CONSTANTS DEFINITIONS                     *|
@@ -14,10 +14,18 @@ contract Controller is Ownable {
 
     using MultiToken for MultiToken.Asset;
 
-    PWNDeed public token;
+    PWNDeed public deed;
     PWNVault public vault;
 
-    uint256 public minDuration = 0;
+    uint256 public minDuration;
+    uint256 public baseFee;         // for simpler division the resulting calculation is divided by `1000000`;
+                                    // for 100% set 1000000
+                                    // for 10% set 100000
+                                    // for 1.5% set 15000
+                                    // for 0.1% set 1000
+                                    // smallest fee is 0.0001% == 1
+    address public collector;
+    address public DAO;
 
     /*----------------------------------------------------------*|
     |*  # EVENTS & ERRORS DEFINITIONS                           *|
@@ -31,7 +39,7 @@ contract Controller is Ownable {
     event PaidBack(uint256 did, bytes32 offer);
     event DeedClaimed(uint256 did);
     event MinDurationChange(uint256 minDuration);
-
+    event FeeChanged(uint256 newFee);
 
     /*----------------------------------------------------------*|
     |*  # CONSTRUCTOR & FUNCTIONS                               *|
@@ -51,7 +59,7 @@ contract Controller is Ownable {
     )
     Ownable()
     {
-        token = PWNDeed(_PWND);
+        deed = PWNDeed(_PWND);
         vault = PWNVault(_PWNV);
     }
 
@@ -76,9 +84,9 @@ contract Controller is Ownable {
         require(_cat < 3, "Unknown asset type");
         require(_expiration > (block.timestamp + minDuration));
 
-        uint256 did = token.mint(_cat, _id, _amount, _tokenAddress, _expiration, msg.sender);
-        vault.push(token.getDeedAsset(did), msg.sender);
-        token.changeStatus(1, did);
+        uint256 did = deed.mint(_cat, _id, _amount, _tokenAddress, _expiration, msg.sender);
+        vault.push(deed.getDeedAsset(did), msg.sender);
+        deed.bumpStatus(did);
 
         emit NewDeed(_cat, _id, _amount, _tokenAddress, _expiration, did);
         return did;
@@ -92,12 +100,11 @@ contract Controller is Ownable {
     function revokeDeed(
         uint256 _did
     ) external {
-        require(msg.sender == token.getBorrower(_did), "The deed doesn't belong to the caller");
-        require(token.getDeedStatus(_did) == 1, "Deed can't be revoked at this stage");
+        require(msg.sender == deed.getBorrower(_did), "The deed doesn't belong to the caller");
+        require(deed.getDeedStatus(_did) == PWNDeed.Status.NEW, "Deed can't be revoked at this stage");
 
-        vault.pull(token.getDeedAsset(_did), msg.sender);
-        token.changeStatus(0, _did);
-        token.burn(_did, msg.sender);
+        vault.pull(deed.getDeedAsset(_did), msg.sender);
+        deed.burn(_did, msg.sender);
         emit DeedRevoked(_did);
     }
 
@@ -120,9 +127,9 @@ contract Controller is Ownable {
         uint256 _did,
         uint256 _toBePaid
     ) external returns (bytes32) {
-        require(token.getDeedStatus(_did) == 1, "Deed not accepting offers");
+        require(deed.getDeedStatus(_did) == PWNDeed.Status.NEW, "Deed not accepting offers");
 
-        bytes32 offer = token.setOffer(_cat, _amount, _tokenAddress, msg.sender, _did, _toBePaid);
+        bytes32 offer = deed.setOffer(_cat, _amount, _tokenAddress, msg.sender, _did, _toBePaid);
         emit NewOffer(_cat, _amount, _tokenAddress,  msg.sender, _toBePaid, _did, offer);
 
         return offer;
@@ -136,9 +143,9 @@ contract Controller is Ownable {
     function revokeOffer(
         bytes32 _offer
     ) external {
-        require(token.getLender(_offer) == msg.sender, "This address didn't create ths offer");
-        require(token.getDeedStatus(token.getDeedID(_offer)) == 1, "Can only remove offers from open Deeds");
-        token.deleteOffer(_offer);
+        require(deed.getLender(_offer) == msg.sender, "This address didn't create ths offer");
+        require(deed.getDeedStatus(deed.getDeedID(_offer)) == PWNDeed.Status.NEW, "Can only remove offers from open Deeds");
+        deed.deleteOffer(_offer);
         emit OfferRevoked(_offer);
     }
 
@@ -154,20 +161,20 @@ contract Controller is Ownable {
     function acceptOffer(
         bytes32 _offer
     ) external returns (bool) {
-        uint256 did = token.getDeedID(_offer);
-        require(msg.sender == token.getBorrower(did), "The deed doesn't belong to the caller");
-        require(token.getDeedStatus(did) == 1, "Deed can't accept more offers");
+        uint256 did = deed.getDeedID(_offer);
+        require(msg.sender == deed.getBorrower(did), "The deed doesn't belong to the caller");
+        require(deed.getDeedStatus(did) == PWNDeed.Status.NEW, "Deed can't accept more offers");
 
-        token.setCredit(did, _offer);
-        token.changeStatus(2, did);
+        deed.setCredit(did, _offer);
+        deed.bumpStatus(did);
 
-        address lender = token.getLender(_offer);
-        vault.pullProxy(token.getOfferAsset(_offer), lender, msg.sender);
+        address lender = deed.getLender(_offer);
+        vault.pullProxy(deed.getOfferAsset(_offer), lender, msg.sender);
 
         MultiToken.Asset memory Deed;
         Deed.cat = 2;
         Deed.id = did;
-        Deed.tokenAddress = address(token);
+        Deed.tokenAddress = address(deed);
 
         vault.pullProxy(Deed, msg.sender, lender);
         emit OfferAccepted(did, _offer);
@@ -185,16 +192,23 @@ contract Controller is Ownable {
      *  @returns true if successful
      */
     function payBack(uint256 _did) external returns (bool) {
-        require(token.getDeedStatus(_did) == 2, "Deed doesn't have an accepted offer to be paid back");
+        require(deed.getDeedStatus(_did) == PWNDeed.Status.SET, "Deed doesn't have an accepted offer to be paid back");
 
-        token.changeStatus(3, _did);
+        deed.bumpStatus(_did);
 
-        bytes32 offer = token.getAcceptedOffer(_did);
-        MultiToken.Asset memory credit = token.getOfferAsset(offer);
-        credit.amount = token.toBePaid(offer);               //override the num of credit given
+        bytes32 offer = deed.getAcceptedOffer(_did);
+        MultiToken.Asset memory credit = deed.getOfferAsset(offer);
+        credit.amount = deed.toBePaid(offer);               //override the num of credit given
 
         vault.push(credit, msg.sender);
-        vault.pull(token.getDeedAsset(_did), token.getBorrower(_did));
+        vault.pull(deed.getDeedAsset(_did), deed.getBorrower(_did));
+
+        // Pay success fee unless lender was the PWN DAO
+        if (deed.getLender(offer) != DAO) {
+            uint256 fee = calculateFee(offer);
+            credit.amount = fee;
+            vault.pullProxy(credit, msg.sender, collector);
+        }
 
         emit PaidBack(_did, offer);
         return true;
@@ -207,23 +221,55 @@ contract Controller is Ownable {
      *  @returns true if successful
      */
     function claimDeed(uint256 _did) external returns (bool) {
-        require(token.balanceOf(msg.sender, _did) == 1, "Caller is not the deed owner");
-        require(token.getDeedStatus(_did) >= 3, "Deed can't be claimed yet");
+        require(deed.balanceOf(msg.sender, _did) == 1, "Caller is not the deed owner");
+        require(deed.getDeedStatus(_did) == PWNDeed.Status.PAID || deed.getDeedStatus(_did) == PWNDeed.Status.EXP, "Deed can't be claimed yet");
 
-        if (token.getDeedStatus(_did) == 3) {
-            bytes32 offer = token.getAcceptedOffer(_did);
-            MultiToken.Asset memory credit = token.getOfferAsset(offer);
-            credit.amount = token.toBePaid(offer);
+        bytes32 offer = deed.getAcceptedOffer(_did);
+        MultiToken.Asset memory credit = deed.getOfferAsset(offer);
 
+        if (deed.getDeedStatus(_did) == PWNDeed.Status.PAID) {
+            credit.amount = deed.toBePaid(offer);
             vault.pull(credit, msg.sender);
-        } else if (token.getDeedStatus(_did) == 4) {
-            vault.pull(token.getDeedAsset(_did), msg.sender);
+
+        } else if (deed.getDeedStatus(_did) == PWNDeed.Status.EXP) {
+            vault.pull(deed.getDeedAsset(_did), msg.sender);
+
+            // Pay success fee
+            if (deed.getLender(offer) != DAO) {
+                credit.amount = calculateFee(offer);
+                vault.pullProxy(credit, msg.sender, collector);
+            }
+
         }
 
         emit DeedClaimed(_did);
-        token.burn(_did, msg.sender);
+        deed.burn(_did, msg.sender);
         return true;
     }
+
+    /*----------------------------------------------------------*|
+    |*  ## DAO & FEE RELATED FUNCTIONS                          *|
+    |*----------------------------------------------------------*/
+
+    function calculateFee(bytes32 _offer) internal view returns (uint256) {
+        MultiToken.Asset memory credit = deed.getOfferAsset(_offer);
+        return (credit.amount * baseFee) / 100000;
+    }
+
+
+    /*
+        *  changeFee
+        *  @dev this function sets a new fee
+        *  @param _newFee - new base fee
+        */
+    function changeFee(uint256 _newFee) external onlyOwner {
+        baseFee = _newFee;
+        emit FeeChanged(_newFee);
+    }
+//
+//    function collectGarbage(uint256 _did) external onlyDAO {
+//    }
+
 
     /*----------------------------------------------------------*|
     |*  ## SETUP FUNCTIONS                                      *|
@@ -238,4 +284,5 @@ contract Controller is Ownable {
         minDuration = _newMinDuration;
         emit MinDurationChange(_newMinDuration);
     }
+
 }

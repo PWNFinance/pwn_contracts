@@ -34,7 +34,7 @@ beforeEach(async function () {
   ERC721 = await ethers.getContractFactory("Basic721");
   ERC1155 = await ethers.getContractFactory("Basic1155");
 
-  PWN = await ethers.getContractFactory("PWN");
+  PWN = await ethers.getContractFactory("PWNController");
   PWNDeed = await ethers.getContractFactory("PWNDeed");
   PWNVault = await ethers.getContractFactory("PWNVault");
 
@@ -81,7 +81,7 @@ describe("PWN contract", function () {
   // You can nest describe calls to create subsections.
   describe("Deployment", function () {
     it("Should deploy PWN with links to Deed & Vault", async function () {
-      expect(await PWN.token()).to.equal(await PWNDeed.address);
+      expect(await PWN.deed()).to.equal(await PWNDeed.address);
       expect(await PWN.vault()).to.equal(await PWNVault.address);
     });
     it("Should deploy Vault with a link to PWN", async function () {

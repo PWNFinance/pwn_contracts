@@ -2,7 +2,7 @@ pragma abicoder v2;
 pragma solidity ^0.8.0;
 
 import "./MultiToken.sol";
-import "./PWN.sol";
+import "./PWNController.sol";
 import "./PWNDeed.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";

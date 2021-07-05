@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 
 library MultiToken {
+
     /**
      *  Struct asset
      *  @param uint8 cat:

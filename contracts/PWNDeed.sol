@@ -18,9 +18,19 @@ contract PWNDeed is ERC1155, ERC1155Burnable, Ownable  {
     uint256 public id;                  // simple DeedID counter
     uint256 private nonce;              // server for offer hash generation
 
+    enum Status {
+        NONE,                           // not yet or no longer existent
+        NEW,                            // created (means it wraps collateral), open for offers, but not locked-in
+        SET,                            // locked-in offer (can't be revoked)
+        PAID,                           // credit paid back -> means now it holds credit + interest
+        EXP,                            // only returned after deed has expired
+        DEAD,                           // never used but still holding collateral
+        UNDEAD                          // expired for more than 2years
+    }
+
     /*
      * Construct defining a Deed
-     * @param status - 0 == none/dead || 1 == new/open || 2 == running/accepted offer || 3 == paid back || 4 == expired
+     * @param status - see { enum Status }
      * @param expiration - unix timestamp (in seconds) setting up the default deadline
      * @param borrower - address of the issuer / borrower - stays the same for entire lifespan of the token
      * @param asset - consisting of another an `Asset` struct defined in the MultiToken library
@@ -28,7 +38,7 @@ contract PWNDeed is ERC1155, ERC1155Burnable, Ownable  {
      * @param pendingOffers - list of offers made to the Deed
      */
     struct Deed {
-        uint8 status;
+        Status status;
         uint256 expiration;
         address borrower;
         MultiToken.Asset asset;
@@ -98,7 +108,7 @@ contract PWNDeed is ERC1155, ERC1155Burnable, Ownable  {
      *  @param _amount - amount of an ERC20 or ERC1155 token || 0 in case of NFTs
      *  @param _tokenAddress - address of the asset contract
      *  @param _expiration - unix time stamp in !! seconds !! (not mili-seconds returned by JS)
-     *  @param _borrower - essentially the tx.origin; the address initiating the new Deed
+     *  @param _borrower - the address initiating the new Deed
      *  @returns Deed ID of the newly minted Deed
      */
     function mint(
@@ -210,22 +220,16 @@ contract PWNDeed is ERC1155, ERC1155Burnable, Ownable  {
     /*
      *  changeStatus
      *  @dev utility function that changes a deed state from 1 -> 3
-     *  @param _status - corresponds to the current stage of the Deed, as follows:
-     *          status = 0 := Deed doesn't exist. If the DID <= highest known DID this means the Deed once existed.
-     *          status = 1 := Deed is created (has locked collateral) and is accepting offers.
-     *          status = 2 := Active deed /w an accepted offer.
-     *          status = 3 := Fully paid deed.
-     *          status = 4 := Expired deed.
+     *  @param _status - corresponds to the current stage of the Deed - see { enum Status }
      *  @param _did - Deed ID selecting the particular Deed
      */
-    function changeStatus(
-        uint8 _status,
+    function bumpStatus(
         uint256 _did
     )
     external
     onlyPWN
     {
-        deeds[_did].status = _status;
+        deeds[_did].status = Status(uint8(deeds[_did].status)+1);
     }
 
 
@@ -246,7 +250,7 @@ contract PWNDeed is ERC1155, ERC1155Burnable, Ownable  {
     virtual override
     {
         for (uint i = 0; i < ids.length; i++) {
-            require(this.getDeedStatus(ids[i]) != 1, "Deed can't be transferred at this stage");
+            require(deeds[i].status != Status.NEW, "Deed can't be transferred at this stage");
         }
     }
 
@@ -262,14 +266,20 @@ contract PWNDeed is ERC1155, ERC1155Burnable, Ownable  {
      *  getDeedStatus
      *  @dev used in contract calls & status checks and also in UI for elementary deed status categorization
      *  @param _did - Deed ID checked for status
-     *  @returns a status number
+     *  @returns a status number - see { enum Status }
      */
-    function getDeedStatus(uint256 _did) public view returns (uint8) {
-        if (deeds[_did].expiration < block.timestamp && deeds[_did].status != 3) {
-            return 4;
+    function getDeedStatus(uint256 _did) public view returns (Status) {
+
+        if (deeds[_did].expiration < block.timestamp) {
+            if (deeds[_did].status == Status.NEW) {
+                return Status.DEAD;
+            } else if (deeds[_did].status == Status.SET) {
+                return Status.EXP;
+            }
         } else {
             return deeds[_did].status;
         }
+        return Status.NONE;
     }
 
     /*
