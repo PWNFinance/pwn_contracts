@@ -13,9 +13,18 @@ async function timestampFromNow(delta) {
 	return lastBlock.timestamp + delta;
 }
 
-function getEIP712Domain(address) {
+function getPWNEIP712Domain(address) {
 	return {
 		name: "PWN",
+		version: "1",
+		chainId: 31337, // Default hardhat network chain id
+		verifyingContract: address
+	}
+};
+
+function getPWNGroupOfferFactoryEIP712Domain(address) {
+	return {
+		name: "PWNGroupOfferFactory",
 		version: "1",
 		chainId: 31337, // Default hardhat network chain id
 		verifyingContract: address
@@ -56,38 +65,69 @@ const EIP712FlexibleOfferTypes = {
 	]
 }
 
-function getOfferHashBytes(offerArray, deedAddress) {
+const EIP712GroupOfferTypes = {
+	GroupOffer: [
+		{ name: "collateralAddress", type: "address" },
+		{ name: "collateralCategory", type: "uint8" },
+		{ name: "collateralAmount", type: "uint256" },
+		{ name: "collateralId", type: "uint256" },
+		{ name: "loanAssetAddress", type: "address" },
+		{ name: "loanAmount", type: "uint256" },
+		{ name: "loanYield", type: "uint256" },
+		{ name: "duration", type: "uint32" },
+		{ name: "expiration", type: "uint40" },
+		{ name: "loanAmountPart", type: "uint256" },
+		{ name: "lender", type: "address" },
+		{ name: "nonce", type: "bytes32" },
+	]
+}
+
+function getOfferHashBytes(offerArray, verifierAddress) {
 	if (offerArray.length == 11) {
 		// Simple offer
 		return ethers.utils._TypedDataEncoder.hash(
-			getEIP712Domain(deedAddress),
+			getPWNEIP712Domain(verifierAddress),
 			EIP712OfferTypes,
 			getOfferObject(...offerArray)
 		);
 	} else if (offerArray.length == 13) {
 		// Flexible offer
 		return ethers.utils._TypedDataEncoder.hash(
-			getEIP712Domain(deedAddress),
+			getPWNEIP712Domain(verifierAddress),
 			EIP712FlexibleOfferTypes,
 			getFlexibleOfferObject(...offerArray)
+		);
+	} else if (offerArray.length == 12) {
+		// Group offer
+		return ethers.utils._TypedDataEncoder.hash(
+			getPWNGroupOfferFactoryEIP712Domain(verifierAddress),
+			EIP712GroupOfferTypes,
+			getGroupOfferObject(...offerArray)
 		);
 	}
 }
 
-async function signOffer(offerArray, deedAddress, signer) {
+async function signOffer(offerArray, verifierAddress, signer) {
 	if (offerArray.length == 11) {
 		// Simple offer
 		return signer._signTypedData(
-			getEIP712Domain(deedAddress),
+			getPWNEIP712Domain(verifierAddress),
 			EIP712OfferTypes,
 			getOfferObject(...offerArray)
 		);
 	} else if (offerArray.length == 13) {
 		// Flexible offer
 		return signer._signTypedData(
-			getEIP712Domain(deedAddress),
+			getPWNEIP712Domain(verifierAddress),
 			EIP712FlexibleOfferTypes,
 			getFlexibleOfferObject(...offerArray)
+		);
+	} else if (offerArray.length == 12) {
+		// Group offer
+		return signer._signTypedData(
+			getPWNGroupOfferFactoryEIP712Domain(verifierAddress),
+			EIP712GroupOfferTypes,
+			getGroupOfferObject(...offerArray)
 		);
 	}
 }
@@ -147,6 +187,36 @@ function getFlexibleOfferObject(
 		durationMax: durationMax,
 		durationMin: durationMin,
 		expiration: expiration,
+		lender: lender,
+		nonce: nonce,
+	}
+}
+
+function getGroupOfferObject(
+	collateralAddress,
+	collateralCategory,
+	collateralAmount,
+	collateralId,
+	loanAssetAddress,
+	loanAmount,
+	loanYield,
+	duration,
+	expiration,
+	loanAmountPart,
+	lender,
+	nonce,
+) {
+	return {
+		collateralAddress: collateralAddress,
+		collateralCategory: collateralCategory,
+		collateralAmount: collateralAmount,
+		collateralId: collateralId,
+		loanAssetAddress: loanAssetAddress,
+		loanAmount: loanAmount,
+		loanYield: loanYield,
+		duration: duration,
+		expiration: expiration,
+		loanAmountPart: loanAmountPart,
 		lender: lender,
 		nonce: nonce,
 	}
