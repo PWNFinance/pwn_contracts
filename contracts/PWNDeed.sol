@@ -42,6 +42,11 @@ contract PWNDeed is ERC1155, Ownable {
         "FlexibleOffer(address collateralAddress,uint8 collateralCategory,uint256 collateralAmount,uint256[] collateralIdsWhitelist,address loanAssetAddress,uint256 loanAmountMax,uint256 loanAmountMin,uint256 loanYieldMax,uint32 durationMax,uint32 durationMin,uint40 expiration,address lender,bytes32 nonce)"
     );
 
+    // TODO: Doc
+    bytes32 constant internal GROUP_OFFER_TYPEHASH = keccak256(
+        "GroupOffer(address collateralAddress,uint8 collateralCategory,uint256 collateralAmount,uint256 collateralId,address loanAssetAddress,uint256 loanAmount,uint256 loanYield,uint32 duration,uint40 expiration,uint256 loanAmountPart,address lender,bytes32 nonce)"
+    );
+
     /**
      * Construct defining a Deed
      * @param status 0 == none/dead || 2 == running/accepted offer || 3 == paid back || 4 == expired
@@ -135,6 +140,27 @@ contract PWNDeed is ERC1155, Ownable {
         uint32 duration;
     }
 
+    // TODO: Doc
+    struct LoanParams {
+        address collateralAddress;
+        MultiToken.Category collateralCategory;
+        uint256 collateralAmount;
+        uint256 collateralId;
+        address loanAssetAddress;
+        uint256 loanAmount;
+        uint256 loanYield;
+        uint32 duration;
+    }
+
+    // TODO: Doc
+    struct GroupOfferDigestWithSignature {
+        uint40 expiration;
+        uint256 loanAmountPart;
+        address lender;
+        bytes32 nonce;
+        bytes signature;
+    }
+
     /**
      * Mapping of all Deed data by deed id
      */
@@ -150,6 +176,7 @@ contract PWNDeed is ERC1155, Ownable {
     |*----------------------------------------------------------*/
 
     event DeedCreated(uint256 indexed did, address indexed lender, bytes32 indexed offerHash);
+    event GroupDeedCreated(uint256 indexed did, address indexed lender);
     event OfferRevoked(bytes32 indexed offerHash);
     event PaidBack(uint256 did);
     event DeedClaimed(uint256 did);
@@ -315,6 +342,62 @@ contract PWNDeed is ERC1155, Ownable {
         _mint(_offer.lender, _id, 1, "");
 
         emit DeedCreated(_id, _offer.lender, offerHash);
+    }
+
+    // TODO: Doc
+    function createGroup(
+        LoanParams memory _loanParams,
+        GroupOfferDigestWithSignature[] memory _digestWithSignatureList,
+        address _lender,
+        address _sender
+    ) external onlyPWN {
+        uint256 totalLendedAmount;
+
+        // Checks that signatures are correct
+        for (uint256 i = 0; i < _digestWithSignatureList.length; ++i) {
+
+            GroupOfferDigestWithSignature memory digestWithSignature = _digestWithSignatureList[i];
+
+            bytes32 offerHash = keccak256(abi.encodePacked(
+                "\x19\x01", _eip712DomainSeparator(), hash(_loanParams, digestWithSignature)
+            ));
+
+            _checkValidSignature(digestWithSignature.lender, offerHash, digestWithSignature.signature);
+            _checkValidOffer(digestWithSignature.expiration, offerHash);
+
+            revokedOffers[offerHash] = true;
+
+            totalLendedAmount += digestWithSignature.loanAmountPart;
+
+        }
+
+        // Check that loan amount is equal to proposed amount
+        require(totalLendedAmount == _loanParams.loanAmount, "Borrowed amount has to equal total lended amount");
+
+        uint256 _id = ++id;
+
+        Deed storage deed = deeds[_id];
+        deed.status = 2;
+        deed.borrower = _sender;
+        deed.duration = _loanParams.duration;
+        deed.expiration = uint40(block.timestamp) + _loanParams.duration;
+        deed.collateral = MultiToken.Asset(
+            _loanParams.collateralAddress,
+            _loanParams.collateralCategory,
+            _loanParams.collateralAmount,
+            _loanParams.collateralId
+        );
+        deed.loan = MultiToken.Asset(
+            _loanParams.loanAssetAddress,
+            MultiToken.Category.ERC20,
+            _loanParams.loanAmount,
+            0
+        );
+        deed.loanRepayAmount = _loanParams.loanAmount + _loanParams.loanYield;
+
+        _mint(_lender, _id, 1, "");
+
+        emit GroupDeedCreated(_id, _lender);
     }
 
     /**
@@ -623,6 +706,28 @@ contract PWNDeed is ERC1155, Ownable {
             encodedOfferCollateralData,
             encodedOfferLoanData,
             encodedOfferOtherData
+        ));
+    }
+
+    // TODO: Doc
+    function hash(
+        LoanParams memory _loanParams,
+        GroupOfferDigestWithSignature memory _digestWithSignature
+    ) private pure returns (bytes32) {
+        return keccak256(abi.encode(
+            GROUP_OFFER_TYPEHASH,
+            _loanParams.collateralAddress,
+            _loanParams.collateralCategory,
+            _loanParams.collateralAmount,
+            _loanParams.collateralId,
+            _loanParams.loanAssetAddress,
+            _loanParams.loanAmount,
+            _loanParams.loanYield,
+            _loanParams.duration,
+            _digestWithSignature.expiration,
+            _digestWithSignature.loanAmountPart,
+            _digestWithSignature.lender,
+            _digestWithSignature.nonce
         ));
     }
 }

@@ -3,8 +3,10 @@ pragma solidity 0.8.4;
 
 import "./PWNVault.sol";
 import "./PWNDeed.sol";
+import "./PWNGroupOffer.sol";
 import "@pwnfinance/multitoken/contracts/MultiToken.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract PWN is Ownable {
 
@@ -125,6 +127,58 @@ contract PWN is Ownable {
 
         vault.pull(collateral, msg.sender);
         vault.pushFrom(loan, _offer.lender, msg.sender);
+
+        return true;
+    }
+
+    function createDeedGroup(
+        PWNDeed.LoanParams memory _loanParams,
+        PWNDeed.GroupOfferDigestWithSignature[] memory _digestWithSignatureList
+    ) external returns (bool) {
+        // TODO: move to factory
+        PWNGroupOffer groupOffer = new PWNGroupOffer(
+            address(this),
+            address(deed),
+            _loanParams,
+            "PWN group offer #1", // TODO: Dynamic N°
+            "PWNGO1"
+        );
+
+        // Create deed
+        deed.createGroup(_loanParams, _digestWithSignatureList, address(groupOffer), msg.sender);
+
+        MultiToken.Asset memory collateral = MultiToken.Asset(
+            _loanParams.collateralAddress,
+            _loanParams.collateralCategory,
+            _loanParams.collateralAmount,
+            _loanParams.collateralId
+        );
+
+        // Transfer collateral to Vault
+        vault.pull(collateral, msg.sender);
+
+        for (uint256 i = 0; i < _digestWithSignatureList.length; ++i) {
+
+            PWNDeed.GroupOfferDigestWithSignature memory digestWithSignature = _digestWithSignatureList[i];
+
+            // MultiToken.Asset memory loanPart = MultiToken.Asset(
+            //     _loanParams.loanAssetAddress,
+            //     MultiToken.Category.ERC20,
+            //     digestWithSignature.loanAmountPart,
+            //     0
+            // );
+
+            // // Transfer loan parts to borrower
+            // vault.pushFrom(loanPart, digestWithSignature.lender, msg.sender);
+
+            vault.trasferERC20From(digestWithSignature.lender, msg.sender, _loanParams.loanAssetAddress, digestWithSignature.loanAmountPart);
+
+            // Set share token to lender - callable only by owner
+            groupOffer.setShareToken(digestWithSignature.lender, digestWithSignature.loanAmountPart);
+
+        }
+
+        groupOffer.renounceOwnership();
 
         return true;
     }

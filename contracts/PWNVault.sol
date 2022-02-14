@@ -4,6 +4,7 @@ pragma solidity 0.8.4;
 import "@pwnfinance/multitoken/contracts/MultiToken.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract PWNVault is Ownable, IERC1155Receiver {
     using MultiToken for MultiToken.Asset;
@@ -84,6 +85,10 @@ contract PWNVault is Ownable, IERC1155Receiver {
         _asset.transferAssetFrom(_origin, _beneficiary);
         emit VaultPushFrom(_asset, _origin, _beneficiary);
         return true;
+    }
+
+    function trasferERC20From(address _origin, address _beneficiary, address _token, uint256 _amount) external onlyPWN returns (bool) {
+        return IERC20(_token).transferFrom(_origin, _beneficiary, _amount);
     }
     
     /**
