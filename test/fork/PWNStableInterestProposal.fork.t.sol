@@ -215,7 +215,11 @@ contract PWNStableProductForkTest is DeploymentTest {
 
         deal(lender, 10000 ether);
         deal(borrower, 10000 ether);
-        deal(address(ARB), borrower, 5000e18, false);
+        (, int256 usdtPrice,,,) = IChainlinkAggregatorLike(USDT_USD_Feed).latestRoundData();
+        (, int256 arbPrice,,,) = IChainlinkAggregatorLike(ARB_USD_Feed).latestRoundData();
+        uint256 coll = 500e18 * uint256(usdtPrice) / uint256(arbPrice) * 100 / 55;
+        // Fund from the current quote: a fixed 5,000 ARB becomes insufficient as its price changes.
+        deal(address(ARB), borrower, coll * 2, false);
         // USDT has non-standard storage layout, so we transfer from a known holder instead of using deal()
         vm.prank(USDT_HOLDER);
         (bool transferSuccess, ) = address(USDT).call(abi.encodeWithSignature("transfer(address,uint256)", lender, 1000e6));
@@ -241,10 +245,6 @@ contract PWNStableProductForkTest is DeploymentTest {
         require(success);
 
         _createLoan(500e6, 5500);
-
-        (, int256 usdtPrice,,,) = IChainlinkAggregatorLike(USDT_USD_Feed).latestRoundData();
-        (, int256 arbPrice,,,) = IChainlinkAggregatorLike(ARB_USD_Feed).latestRoundData();
-        uint256 coll = 500e18 * uint256(usdtPrice) / uint256(arbPrice) * 100 / 55;
 
         assertApproxEqRel(ARB.balanceOf(address(__d.loan)), coll, 0.0001 ether); // 0.01% tolerance
     }
