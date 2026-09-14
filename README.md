@@ -10,6 +10,8 @@ In the world of decentralized finance, PWN stands out with its unique approach t
 
 For developers interested in integrating with or building on top of PWN, we provide comprehensive documentation. You can find in-depth information about our smart contracts and their usage in the [PWN Developer Docs](https://dev-docs.pwn.xyz/).
 
+For the new crowdsource vault claim interface, transfer semantics, and settlement accounting, see [Crowdsource repayment claims](docs/crowdsource-repayments.md).
+
 ## Deployment
 
 | Name                                   | Address                                    |

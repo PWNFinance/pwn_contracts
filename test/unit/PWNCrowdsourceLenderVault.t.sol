@@ -72,6 +72,7 @@ abstract contract PWNCrowdsourceLenderVaultTest is Test {
         vm.mockCall(terms.collateralAddress, abi.encodeWithSelector(IERC20Metadata.decimals.selector), abi.encode(18));
         vm.mockCall(loanContract, abi.encodeWithSelector(PWNProposalManager.makeProposalAcceptable.selector), abi.encode(proposalHash));
         vm.mockCall(loanContract, abi.encodeWithSelector(PWNLoan.getLenderSpecHash.selector), abi.encode(keccak256("lenderSpecHash")));
+        vm.mockCall(loanContract, abi.encodeWithSelector(bytes4(keccak256("loanLock(uint256)"))), abi.encode(false));
 
         loan = PWNLoan.LOAN({
             borrower: makeAddr("borrower"),
@@ -84,6 +85,8 @@ abstract contract PWNCrowdsourceLenderVaultTest is Test {
             product: IPWNProduct(product)
         });
         _mockLoan(loan);
+        _mockLoanStatus(2);
+        vm.mockCall(loanContract, abi.encodeWithSelector(PWNLoan.liquidate.selector), "");
         _mockLoanRepaymentAmount(101 ether);
 
         lender = [makeAddr("lender1"), makeAddr("lender2"), makeAddr("lender3"), makeAddr("lender4")];
@@ -136,11 +139,11 @@ abstract contract PWNCrowdsourceLenderVaultTest is Test {
 
 
     function _storeLoanId(uint256 _loanId) internal {
-        vm.store(address(crowdsource), bytes32(uint256(5)), bytes32(_loanId));
+        crowdsource.workaround_setLoanId(_loanId);
     }
 
     function _storeLoanEnded(bool _ended) internal {
-        vm.store(address(crowdsource), bytes32(uint256(6)), bytes32(uint256(_ended ? 1 : 0)));
+        crowdsource.workaround_setLoanEnded(_ended);
     }
 
     function _storeReceiptBalance(address _owner, uint256 _balance) internal {
@@ -159,6 +162,14 @@ abstract contract PWNCrowdsourceLenderVaultTest is Test {
 |*----------------------------------------------------------*/
 
 contract PWNCrowdsourceLenderVault_Constructor_Test is PWNCrowdsourceLenderVaultTest {
+
+    function test_shouldRejectIdenticalCreditAndCollateral() external {
+        terms.collateralAddress = terms.creditAddress;
+        vm.expectRevert("PWNCrowdsourceLenderVault: identical assets");
+        new PWNCrowdsourceLenderVaultHarness(
+            PWNLoan(loanContract), PWNInstallmentsProduct(product), IAaveLike(aave), "Crowdsource", "CRWD", terms
+        );
+    }
 
     function test_shouldMakeProposal() public {
         vm.expectCall(loanContract, abi.encodeWithSelector(PWNProposalManager.makeProposalAcceptable.selector));
@@ -249,7 +260,7 @@ contract PWNCrowdsourceLenderVault_TotalAssets_Test is PWNCrowdsourceLenderVault
 
         vm.expectCall(loanContract, abi.encodeWithSelector(PWNLoan.getLOANStatus.selector));
         vm.expectCall(loanContract, abi.encodeWithSelector(PWNLoan.getLOANDebt.selector));
-        assertEq(crowdsource.totalAssets(), 120 ether + 99 ether);
+        assertEq(crowdsource.totalAssets(), 99 ether);
     }
 
     function test_shouldReturnLoanAndOwnedBalance_whenRunningStage_whenDefaultedLoan() external {
@@ -262,7 +273,7 @@ contract PWNCrowdsourceLenderVault_TotalAssets_Test is PWNCrowdsourceLenderVault
 
         vm.expectCall(loanContract, abi.encodeWithSelector(PWNLoan.getLOANStatus.selector));
         vm.expectCall(loanContract, abi.encodeWithSelector(PWNLoan.getLOANDebt.selector), 0);
-        assertEq(crowdsource.totalAssets(), 120 ether);
+        assertEq(crowdsource.totalAssets(), 0);
     }
 
     function test_shouldReturnLoanAndOwnedBalance_whenRunningStage_whenRepaidLoan() external {
@@ -275,7 +286,7 @@ contract PWNCrowdsourceLenderVault_TotalAssets_Test is PWNCrowdsourceLenderVault
 
         vm.expectCall(loanContract, abi.encodeWithSelector(PWNLoan.getLOANStatus.selector));
         vm.expectCall(loanContract, abi.encodeWithSelector(PWNLoan.getLOANDebt.selector), 0);
-        assertEq(crowdsource.totalAssets(), 120 ether);
+        assertEq(crowdsource.totalAssets(), 0);
     }
 
     function test_shouldReturnOwnedBalance_whenEnding() external {
@@ -285,7 +296,7 @@ contract PWNCrowdsourceLenderVault_TotalAssets_Test is PWNCrowdsourceLenderVault
         _mockAaveCreditBalance(address(crowdsource), 10 ether); // should not be used
         _mockLoanRepaymentAmount(99 ether); // should not be used
 
-        assertEq(crowdsource.totalAssets(), 120 ether);
+        assertEq(crowdsource.totalAssets(), 0);
     }
 
 }
@@ -349,23 +360,16 @@ contract PWNCrowdsourceLenderVault_MaxWithdraw_Test is PWNCrowdsourceLenderVault
         assertEq(crowdsource.maxWithdraw(lender[0]), 12 ether);
     }
 
-    function test_shouldReturnUserLiquidity_whenRunningStage_whenLessThanAvailableLiquidity() external {
+    function test_shouldDisableWithdrawWhileRunning() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
         _storeReceiptBalance(lender[0], 4 ether);
-        _mockCreditBalance(address(crowdsource), 300 ether);
-        crowdsource.workaround_setConvertToAssetsRatio(50e4);
-
-        assertEq(crowdsource.maxWithdraw(lender[0]), 200 ether);
+        assertEq(crowdsource.maxWithdraw(lender[0]), 0);
     }
 
-    function test_shouldReturnAvailableLiquidity_whenRunningStage_whenLessThanUserLiquidity() external {
+    function test_cashDoesNotEnableRunningWithdrawals() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
-        _storeReceiptBalance(lender[0], 4 ether);
         _mockCreditBalance(address(crowdsource), 150 ether);
-        _mockLoanStatus(2);
-        crowdsource.workaround_setConvertToAssetsRatio(50e4);
-
-        assertEq(crowdsource.maxWithdraw(lender[0]), 150 ether);
+        assertEq(crowdsource.maxWithdraw(lender[0]), 0);
     }
 
     function test_shouldBeZero_whenEndingStage() external {
@@ -392,23 +396,19 @@ contract PWNCrowdsourceLenderVault_MaxRedeem_Test is PWNCrowdsourceLenderVaultTe
         assertEq(crowdsource.maxRedeem(lender[0]), 1 ether);
     }
 
-    function test_shouldReturnUserLiquidity_whenRunningStage_whenLessThanAvailableLiquidity() external {
+    function test_shouldDisableRedeemWhileRunning() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
         _storeReceiptBalance(lender[0], 2 ether);
-        _mockCreditBalance(address(crowdsource), 300 ether);
-        crowdsource.workaround_setConvertToSharesRatio(0.01e4);
-
-        assertEq(crowdsource.maxRedeem(lender[0]), 2 ether);
+        assertEq(crowdsource.maxRedeem(lender[0]), 0);
     }
 
-    function test_shouldReturnAvailableLiquidity_whenRunningStage_whenLessThanUserLiquidity() external {
+    function test_shouldExposeAllSharesBeforeTerminalSettlement() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
         _storeReceiptBalance(lender[0], 4 ether);
-        _mockCreditBalance(address(crowdsource), 200 ether);
-        _mockLoanStatus(2);
-        crowdsource.workaround_setConvertToSharesRatio(0.01e4);
-
-        assertEq(crowdsource.maxRedeem(lender[0]), 2 ether);
+        _mockLoanStatus(3);
+        assertEq(crowdsource.maxRedeem(lender[0]), 4 ether);
+        _mockLoanStatus(4);
+        assertEq(crowdsource.maxRedeem(lender[0]), 4 ether);
     }
 
 }
@@ -472,7 +472,7 @@ contract PWNCrowdsourceLenderVault_PreviewWithdraw_Test is PWNCrowdsourceLenderV
 
     function test_shouldRevert_whenEndingStage() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.ENDING);
-        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use redeem");
+        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use claimRepayments");
         crowdsource.previewWithdraw(100 ether);
     }
 
@@ -483,7 +483,8 @@ contract PWNCrowdsourceLenderVault_PreviewWithdraw_Test is PWNCrowdsourceLenderV
         assertEq(crowdsource.previewWithdraw(20 ether), 8400 ether);
 
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
-        assertEq(crowdsource.previewWithdraw(3 ether), 1260 ether);
+        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use claimRepayments");
+        crowdsource.previewWithdraw(3 ether);
     }
 
 }
@@ -505,7 +506,7 @@ contract PWNCrowdsourceLenderVault_PreviewRedeem_Test is PWNCrowdsourceLenderVau
         assertEq(crowdsource.previewRedeem(10 ether), 4200 ether);
 
         _mockStage(PWNCrowdsourceLenderVault.Stage.ENDING);
-        assertEq(crowdsource.previewRedeem(5 ether), 2100 ether);
+        assertEq(crowdsource.previewRedeem(5 ether), 0);
     }
 
 }
@@ -544,16 +545,17 @@ contract PWNCrowdsourceLenderVault_Deposit_Test is PWNCrowdsourceLenderVaultTest
     }
 
     function test_shouldDeposit() external {
-        crowdsource.workaround_setConvertToSharesRatio(1.1e4);
+        crowdsource.workaround_setConvertToSharesRatio(2e4);
+        crowdsource.workaround_setConvertToAssetsRatio(0.5e4);
 
         vm.expectCall(terms.creditAddress, abi.encodeWithSelector(IERC20.transferFrom.selector, lender[0], address(crowdsource), 100 ether));
 
         vm.expectEmit();
-        emit Deposit(lender[0], lender[0], 100 ether, 110 ether);
+        emit Deposit(lender[0], lender[0], 100 ether, 200 ether);
 
         vm.prank(lender[0]);
         crowdsource.deposit(100 ether, lender[0]);
-        assertEq(crowdsource.balanceOf(lender[0]), 110 ether);
+        assertEq(crowdsource.balanceOf(lender[0]), 200 ether);
     }
 
     function test_shouldSupplyToAave() external {
@@ -634,6 +636,7 @@ contract PWNCrowdsourceLenderVault_Withdraw_Test is PWNCrowdsourceLenderVaultTes
 
         _mockCreditBalance(address(crowdsource), 1000 ether);
         _storeReceiptBalance(lender[0], 100 ether);
+        _storeReceiptTotalSupply(100 ether);
         crowdsource.workaround_setConvertToAssetsRatio(2e4);
         crowdsource.workaround_setConvertToSharesRatio(0.5e4);
     }
@@ -641,7 +644,7 @@ contract PWNCrowdsourceLenderVault_Withdraw_Test is PWNCrowdsourceLenderVaultTes
 
     function test_shouldRevert_whenEndingStage() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.ENDING);
-        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use redeem");
+        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use claimRepayments");
         crowdsource.withdraw(100 ether, lender[0], lender[0]);
     }
 
@@ -669,7 +672,7 @@ contract PWNCrowdsourceLenderVault_Withdraw_Test is PWNCrowdsourceLenderVaultTes
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
         _mockLoanStatus(3);
 
-        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use redeem");
+        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use claimRepayments");
         vm.prank(lender[0]);
         crowdsource.withdraw(100 ether, lender[0], lender[0]);
     }
@@ -678,13 +681,20 @@ contract PWNCrowdsourceLenderVault_Withdraw_Test is PWNCrowdsourceLenderVaultTes
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
         _mockLoanStatus(4);
 
-        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use redeem");
+        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use claimRepayments");
         vm.prank(lender[0]);
         crowdsource.withdraw(100 ether, lender[0], lender[0]);
     }
 
-    function test_shouldWithdraw() external {
+    function test_shouldRejectRunningWithdrawal() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
+        vm.expectRevert("PWNCrowdsourceLenderVault: withdraw disabled, use claimRepayments");
+        vm.prank(lender[0]);
+        crowdsource.withdraw(1, lender[0], lender[0]);
+    }
+
+    function test_shouldWithdraw() external {
+        _mockStage(PWNCrowdsourceLenderVault.Stage.POOLING);
         _mockLoanStatus(2);
 
         vm.expectCall(terms.creditAddress, abi.encodeWithSelector(IERC20.transfer.selector, lender[0], 100 ether));
@@ -712,10 +722,18 @@ contract PWNCrowdsourceLenderVault_Redeem_Test is PWNCrowdsourceLenderVaultTest 
         _mockCreditBalance(address(crowdsource), 1000 ether);
         _mockCollateralBalance(address(crowdsource), 0);
         _storeReceiptBalance(lender[0], 100 ether);
+        _storeReceiptTotalSupply(100 ether);
         crowdsource.workaround_setConvertToAssetsRatio(2e4);
         crowdsource.workaround_setConvertToSharesRatio(0.5e4);
     }
 
+
+    function test_shouldRejectRunningRedemption() external {
+        _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
+        vm.expectRevert("PWNCrowdsourceLenderVault: redeem disabled");
+        vm.prank(lender[0]);
+        crowdsource.redeem(1, lender[0], lender[0]);
+    }
 
     function test_shouldWithdrawFromAave_whenPoolingStage() external {
         aaveReserveData.aTokenAddress = makeAddr("aToken");
@@ -748,7 +766,7 @@ contract PWNCrowdsourceLenderVault_Redeem_Test is PWNCrowdsourceLenderVaultTest 
     }
 
     function test_shouldRedeem() external {
-        _mockStage(PWNCrowdsourceLenderVault.Stage.RUNNING);
+        _mockStage(PWNCrowdsourceLenderVault.Stage.POOLING);
         _mockLoanStatus(2);
 
         vm.expectCall(terms.creditAddress, abi.encodeWithSelector(IERC20.transfer.selector, lender[0], 80 ether));
@@ -791,6 +809,16 @@ contract PWNCrowdsourceLenderVault_TotalCollateralAssets_Test is PWNCrowdsourceL
         _mockCollateralBalance(address(crowdsource), 10 ether);
     }
 
+
+    function test_collateralRatioDoesNotRequireDecimalScaling() external {
+        vm.mockCall(terms.collateralAddress, abi.encodeWithSelector(IERC20Metadata.decimals.selector), abi.encode(uint8(255)));
+        crowdsource = new PWNCrowdsourceLenderVaultHarness(
+            PWNLoan(loanContract), PWNInstallmentsProduct(product), IAaveLike(aave), "Crowdsource", "CRWD", terms
+        );
+        _mockCollateralBalance(address(crowdsource), 100 ether);
+        _storeReceiptTotalSupply(100 ether);
+        assertEq(crowdsource.exposed_convertToCollateralAssets(25 ether, Math.Rounding.Down), 25 ether);
+    }
 
     function test_shouldReturnCollateralBalance_whenPoolingStage() external {
         _mockStage(PWNCrowdsourceLenderVault.Stage.POOLING);
@@ -877,6 +905,7 @@ contract PWNCrowdsourceLenderVault_OnLoanCreated_Test is PWNCrowdsourceLenderVau
         super.setUp();
 
         _mockStage(PWNCrowdsourceLenderVault.Stage.POOLING);
+        _storeReceiptTotalSupply(100 ether);
     }
 
 
@@ -932,6 +961,7 @@ contract PWNCrowdsourceLenderVault_OnLoanCreated_Test is PWNCrowdsourceLenderVau
         );
 
         _mockStage(PWNCrowdsourceLenderVault.Stage.POOLING);
+        _storeReceiptTotalSupply(100 ether);
 
         vm.expectCall(aave, abi.encodeWithSelector(IAaveLike.withdraw.selector, loan.creditAddress, type(uint256).max, address(crowdsource)));
 
